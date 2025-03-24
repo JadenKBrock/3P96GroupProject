@@ -8,6 +8,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
+from torchvision.models import ResNet18_Weights
 import os
 from torch.optim import lr_scheduler
 import torchvision.models as models
@@ -36,7 +37,6 @@ def scan_and_clean_directory(directory):
             file_path = os.path.join(root, file)
             check_and_remove_corrupted_image(file_path)
 
-
 def main():
     # Store experiment data
     experiment_data = {
@@ -59,7 +59,7 @@ def main():
             "batch_size": 128,
             "learning_rate": lr,  # Use the current loop's learning rate
             "momentum": 0.9,
-            "epochs": 200
+            "epochs": 97
         }
 
         params = f"Experiment_LR_{hyperparams['learning_rate']}_BS_{hyperparams['batch_size']}_MOM_{hyperparams['momentum']}_EP_{hyperparams['epochs']}_OPTIMIZER_{experiment_data['optimizer']}_MOD_{experiment_data['model']}"
@@ -75,10 +75,13 @@ def main():
 
         # Data preprocessing
         transform = transforms.Compose([
-            transforms.Resize((224, 224)),
+            transforms.Resize((224, 224)),  
             transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, padding=2),
-            transforms.ToTensor(), 
+            #transforms.RandomRotation(20),  
+            transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+            #transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            transforms.ToTensor(),
+            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
         batch_size = hyperparams['batch_size']
 
@@ -105,15 +108,16 @@ def main():
             plt.show()
 
         # Using ResNet18 Model
-        model = models.resnet18() 
+        model = models.resnet18()  
         
         num_ftrs = model.fc.in_features
         model.fc = nn.Linear(num_ftrs, 2)
         model = model.to(device)
 
         
+        #criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
         criterion = nn.CrossEntropyLoss()
-        
+
         # SGD optimizer
         #optimizer = optim.SGD(model.parameters(), lr=hyperparams['learning_rate'], momentum=hyperparams['momentum'])
         
@@ -121,13 +125,20 @@ def main():
         optimizer = optim.Adam(model.parameters(), lr=hyperparams['learning_rate'])
 
         # Add learning rate scheduler
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.9)  # Multiply learning rate by 0.8 every 10 epochs
+        #scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.8)  # Multiply learning rate by 0.8 every 10 epochs
+
+        early_stop = 10
+        best_loss = float('inf')
+        stopping_counter = 0
 
         # Training loop
         for epoch in range(hyperparams["epochs"]):
             running_loss = 0.0
             model.train()  # Set to training mode
             print(f"Epoch: {epoch}")
+
+
             for i, data in enumerate(trainloader, 0):
                 print(f"I: {i}")
                 inputs, labels = data
@@ -174,8 +185,18 @@ def main():
 
             print(f"Epoch {epoch + 1}/{hyperparams['epochs']}: Val Loss: {val_loss:.3f}, Val Accuracy: {val_accuracy:.2f}%")
 
+            if val_loss < best_loss:
+                best_loss = val_loss
+                stopping_counter = 0
+            else:
+                stopping_counter += 1
+
+            if stopping_counter >= early_stop:
+                print("Early stopping triggered!")
+                break
+
             # Update learning rate
-            scheduler.step()
+            scheduler.step(val_loss)
 
         # Save model
         #torch.save(model.state_dict(), f"model_VER_{experiment_data['version']}_{params}.pth")
